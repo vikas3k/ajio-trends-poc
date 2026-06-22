@@ -1,0 +1,24 @@
+# secrets and credentials — never commit
+.env
+.gcp/
+*.json
+!output/agentic_trends.csv
+!output/buzzword_dictionary.csv
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# input data — internal, not for public repo
+input_data/
+
+# other outputs (large / regenerated each run)
+output/trend_store.json
+output/named_themes.csv
+output/themes.csv
+output/normalized_rows.csv
+output/Impetus_output_as_input.csv
+output/trends_for_review.csv
