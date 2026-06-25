@@ -137,7 +137,48 @@ def _grounded_brief(landscape: str, today: str, min_chars: int = 600, attempts: 
     return best
 
 
-def run(state: AgentState, max_combos: int = 400) -> AgentState:
+def _attr_trends_for_batch(
+    batch_combos: list[dict],
+    buzz_lines: str,
+    batch_label: str,
+) -> list[AttributeTrend]:
+    """Run attribute_trends for one batch of combos. Called in parallel."""
+    attr_prompt = prompts.fmt(
+        "agent2.attribute_trends",
+        buzz_lines=buzz_lines,
+        combos_json=json.dumps(batch_combos, ensure_ascii=False, indent=1),
+    )
+    result = structured_call(
+        attr_prompt, list[AttributeTrend],
+        system=prompts.get("agent2.attr_system"),
+        name=f"agent2_attribute_trends_{batch_label}",
+        temperature=0.6,
+    ) or []
+    print(f"[agent2] batch '{batch_label}': {len(batch_combos)} combos -> {len(result)} trends")
+    return result
+
+
+def _split_into_batches(records: list[dict]) -> list[tuple[str, list[dict]]]:
+    """Split combos into Gender × Category batches for parallel processing.
+
+    Each batch gets one LLM call, so keep each batch small enough to stay
+    within the model's context and timeout. Splitting by gender × category
+    naturally produces balanced batches and ensures every subcategory gets
+    dedicated attention.
+    """
+    from collections import defaultdict
+    batches: dict[str, list[dict]] = defaultdict(list)
+    for rec in records:
+        gender = rec.get("gender", "Unknown")
+        category = rec.get("category", "Unknown")
+        key = f"{gender}_{category}".replace(" ", "_").replace("/", "_")
+        batches[key].append(rec)
+    return list(batches.items())
+
+
+def run(state: AgentState) -> AgentState:
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     records = state["cleaned_records"]
     today = _dt.date.today().isoformat()
 
@@ -159,16 +200,23 @@ def run(state: AgentState, max_combos: int = 400) -> AgentState:
     )
     print(f"[agent2] buzzword dictionary: {len(buzz_dicts)} buzzwords")
 
-    # C. Attribute-driven trends from Impetus combos (PRD 6.1), buzzword-first.
-    combos = records[:max_combos]
-    attr_prompt = prompts.fmt(
-        "agent2.attribute_trends", buzz_lines=buzz_lines,
-        combos_json=json.dumps(combos, ensure_ascii=False, indent=1),
-    )
-    attr_trends = structured_call(
-        attr_prompt, list[AttributeTrend], system=prompts.get("agent2.attr_system"),
-        name="agent2_attribute_trends", temperature=0.6,
-    ) or []
+    # C. Attribute-driven trends — parallel calls, one per Gender × Category batch.
+    batches = _split_into_batches(records)
+    print(f"[agent2] attribute_trends: {len(records)} combos split into {len(batches)} batches, running in parallel")
+
+    attr_trends: list[AttributeTrend] = []
+    with ThreadPoolExecutor(max_workers=len(batches)) as pool:
+        futures = {
+            pool.submit(_attr_trends_for_batch, batch_combos, buzz_lines, label): label
+            for label, batch_combos in batches
+        }
+        for future in as_completed(futures):
+            label = futures[future]
+            try:
+                attr_trends.extend(future.result())
+            except Exception as e:
+                print(f"[agent2] batch '{label}' failed: {e}")
+
     _check_bucket_coverage(attr_trends)
     print(f"[agent2] attribute_driven trends: {len(attr_trends)}")
 

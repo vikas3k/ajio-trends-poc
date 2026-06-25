@@ -10,16 +10,22 @@
 #   agent2.research       : {today} {landscape}
 #   agent2.buzzword_extract : {brief}
 #   agent2.attribute_trends : {buzz_lines} {combos_json}
-#   agent2.context_trends   : {today} {brief} {buzz_lines}
+#   agent2.context_trends   : {today} {brief} {buzz_lines} {calendar}
 #   agent3.classify         : {payload_json}
+#
+# VERSIONING: bump `version` whenever any prompt text changes. The version is
+# stamped on every Langfuse generation trace so prompt iterations are queryable.
+version: "v1.3"
 
 shared:
   curated_brief: |
     Curated fashion-trend context (Indian apparel market):
-    - Global aesthetics currently driving social/retail: quiet luxury / old money, the '-core' family (gorpcore, balletcore, cottagecore, tenniscore, office-siren), clean-girl minimalism, Y2K & 90s revival (slip dresses, wide-leg & baggy denim, cargo), mob-wife glam, dopamine/colour-pop, coastal/resort, athleisure.
-    - Colour stories: butter yellow, espresso/mocha brown, powder blue, greige.
-    - Real buzzwords customers recognise: 'Korean Pants', 'Butter Yellow', 'Quiet Luxury', 'Mob Wife Aesthetic', 'Resort Ready', 'Airport Look', 'Old Money', 'Coquette'.
+    - Global aesthetics currently driving social/retail: quiet luxury / old money, the '-core' family (gorpcore, balletcore, cottagecore, tenniscore, office-siren, celestial core, mermaidcore, poetcore), clean-girl minimalism, Y2K & 90s revival (slip dresses, wide-leg & baggy denim, cargo), mob-wife glam, dopamine/colour-pop, coastal/resort, athleisure.
+    - Colour stories trending AS STANDALONE TRENDS (not just descriptors): Butter Yellow, Cobalt Blue, Mocha Girl / Espresso Brown, Terracotta Heat, Sage Green, Hot Pink, Classic White, Blush Pink.
+    - Fabric/construction trends AS STANDALONE TRENDS: Linen Everything, Crochet Moment, Broderie Anglaise, Satin Slip, Sheer Chiffon.
+    - Real buzzwords customers recognise: 'Korean Pants', 'Butter Yellow', 'Quiet Luxury', 'Mob Wife Aesthetic', 'Resort Ready', 'Airport Look', 'Old Money', 'Coquette', 'Cottagecore', 'Tenniscore', 'Clean Girl Aesthetic', 'Cobalt Blue', 'Mocha Girl', 'Linen Everything', 'Celestial Core', 'Jorts Season'.
     - Indian retail calendar: summer/high-summer (Apr-Jun: cotton/linen, resort), monsoon (Jun-Sep: quick-dry/functional), festive & wedding season (Aug-Nov: Raksha Bandhan, Onam, Navratri, Durga Puja, Diwali; then Nov-Feb weddings) driving ethnic/occasion/embellished wear.
+    - Live events driving fashion RIGHT NOW (mid-2026): FIFA World Cup 2026 (Jun-Jul, football-core jerseys & fan dressing), ICC T20 World Cup 2026 (Jun-Jul, Bleed Blue / cricket fan wear), India Couture Week (Jul), Lakme Fashion Week (Oct). These are major event_driven trend sources.
 
   naming_principles: |
     NAMING PRINCIPLES (mandatory - PRD):
@@ -67,7 +73,7 @@ agent2:
     Catalogue attribute landscape (attribute: top values with counts):
     {landscape}
 
-    Search the web and report the CURRENT social-media and market signal for the Indian apparel market right now: (a) real circulating fashion BUZZWORDS/aesthetics customers recognise, (b) the upcoming festivals / occasions in the next ~3 months and the looks tied to them, (c) any live EVENTS driving fashion (fashion weeks, sporting events, celeb/OTT moments), (d) functional/seasonal drivers (monsoon, travel, work). Return AT LEAST 12 concrete bullet points, each naming a specific trend, buzzword or driver.
+    Search the web and report the CURRENT social-media and market signal for the Indian apparel market right now: (a) real circulating fashion BUZZWORDS/aesthetics customers recognise, (b) the upcoming festivals / occasions in the next ~3 months and the looks tied to them, (c) any live EVENTS driving fashion (fashion weeks, sporting events like ICC T20/FIFA, celeb/OTT moments), (d) functional/seasonal drivers (monsoon, travel, work), (e) what is currently TRENDING on Myntra, Zara India, and H&M India — search for their new arrivals and trending pages to identify which categories and aesthetics they are pushing right now. Use this competitor signal to validate which trends have broad market momentum, not just social buzz. Return AT LEAST 15 concrete bullet points, each naming a specific trend, buzzword, competitor signal, or driver.
 
   research_retry_suffix: |
 
@@ -75,6 +81,11 @@ agent2:
 
   buzzword_extract: |
     From this live research, extract a dictionary of CURRENT real circulating fashion buzzwords for the Indian market. For each: the buzzword, what apparel attributes/look it maps to, its likely trend category (attribute_driven | occasion_festival | event_driven | functional), and a short note.
+
+    You MUST include buzzwords across ALL four categories — do not only extract aesthetic buzzwords. Specifically ensure you include:
+    - At least 2-3 event_driven buzzwords (e.g. FIFA / football-core, Bleed Blue, cricket fan wear, couture-inspired looks, celeb/OTT moments)
+    - At least 2-3 functional buzzwords (e.g. Monsoon Ready, Airport Look, Office Siren)
+    - At least 4-5 attribute_driven buzzwords (the aesthetics and vibes)
 
     RESEARCH:
     {brief}
@@ -86,13 +97,35 @@ agent2:
     BUZZWORD DICTIONARY (prefer these real names where one fits the look):
     {buzz_lines}
 
-    CLEANED APPAREL ATTRIBUTE COMBINATIONS (combo_id + attributes + count + n_trending). Group these into distinct attribute-driven trends — do NOT merge combos that represent meaningfully different looks. Create a separate trend for every distinct combination of gender + garment type + silhouette/style + colour story that has enough signal. Keep distinct looks separate: different silhouettes (e.g. wide-leg vs. straight), different garment types (tops vs. bottoms), different genders, or different colour stories each deserve their own trend. Do NOT collapse unrelated combos just to reduce count. For each trend give 3-5 candidate_names (a matching real buzzword first if one fits), a display_name, description, rationale, the raw_signal (the attribute combo), matched_buzzword (or ""), and member_combo_ids for traceback.
+    CLEANED APPAREL ATTRIBUTE COMBINATIONS (each row has combo_id, gender, garment/subcategory, colour, style, pattern, fabric + count + n_trending).
 
-    MINIMUM COVERAGE REQUIREMENT: you MUST produce at least 10 trends for every gender × garment-category combination present in the data. Garment categories are:
-    - Topwear: Tops, T-shirts, Shirts, Knitwear, Sweats/Hoodies, Outerwear
-    - Bottomwear: Trousers, Denim, Shorts, Joggers/Knit Bottoms, Leggings/Tights, Skirts
-    - Others: Co-ords/Sets, Dresses, Jumpsuits/Rompers
-    For example, if the data contains Men's Bottomwear combos, you must produce at least 10 distinct Men's Bottomwear trends — covering different silhouettes, colours, or garment types within that bucket. If a bucket genuinely has fewer than 10 meaningfully distinct signals, produce as many distinct trends as the data supports (do not invent trends with no signal). Go wide on silhouette × colour × garment-type combinations to reach the minimum.
+    YOUR TASK has TWO parts:
+
+    PART A — Per-bucket themes:
+    For EVERY distinct Gender × Subcategory bucket present in the data, identify AT LEAST 2 distinct THEME(S) — 3 if the data supports it. You MUST output at least 2 themes per bucket, even if the combos are sparse. Do NOT skip any bucket. Topwear buckets (tops, t-shirts, shirts, polo, tanks & vests, knitwear, sweaters, sweatshirts, hoodies, outerwear, blouses, camisoles) MUST be covered — they are the largest volume categories.
+
+    PART B — Cross-category trends (output these IN ADDITION to Part A, not instead):
+    After doing per-bucket themes, look ACROSS all buckets and generate:
+    1. COLOUR trends: if a colour (e.g. butter yellow, cobalt blue, mocha brown, sage green, terracotta, hot pink) appears strongly across multiple buckets, create ONE standalone colour trend for it. Name it as the colour IS the trend — e.g. "Butter Yellow", "Cobalt Blue Moment", "Mocha Girl Aesthetic". raw_signal = the colour + all garment types it spans.
+    2. FABRIC/CONSTRUCTION trends: if a fabric (linen, crochet, broderie, satin, sheer) is dominant across multiple buckets, create ONE standalone fabric trend — e.g. "Linen Everything", "Crochet Moment", "The Broderie Edit". raw_signal = the fabric + garment types it spans.
+    3. CO-ORDS/MATCHING SETS trend: if co-ords or sets appear in the data, always generate a matching-sets trend — e.g. "Twinning Sets", "Matching Moment". This is one of the biggest trends on competitor sites right now.
+    Generate 2-4 cross-category trends total in Part B.
+
+    WHAT A THEME IS:
+    A theme is the dominant aesthetic or mood running through a bucket's combos — not a description of the garment. Examples:
+    - Women × SWEATERS combos (blue striped, brown logo) → theme: "Varsity Vibes" AND "Espresso Edit" (2 separate themes)
+    - Men × Chinos combos (neutral straight, blue straight) → theme: "Quiet Luxury" AND "Clean Tailoring" (2 separate themes)
+    - Women × SHORTS combos (black relaxed, denim relaxed) → theme: "Jorts Season" AND "Off-Duty Cool" (2 separate themes)
+    - Women × TOPS combos (printed crop, solid fitted) → theme: "Coastal Cool" AND "Y2K Crop" (2 separate themes)
+
+    NAMING RULES (strict):
+    - The trend name MUST NOT include the gender or garment type. Never "Women's Relaxed Shorts" or "Men's Cargo Trousers".
+    - Name the AESTHETIC or MOOD, not the product. Use real circulating buzzwords where one fits.
+    - 3-5 candidate_names per theme, buzzword-first.
+    - raw_signal should still list the key attributes (colour, style, fabric) so buyers know what products belong.
+    - Keep themes within a bucket DISTINCT — each one should name a different aesthetic or colour story, not the same vibe with a different label.
+
+    <<naming_principles>>
 
     {combos_json}
 
@@ -100,7 +133,7 @@ agent2:
     Today is {today}. Using the live research, buzzword dictionary, and the EXACT festival/occasion calendar below, GENERATE trends for AJIO India across these categories:
     - occasion_festival: one trend per distinct festival or wedding occasion listed in the calendar. Use the exact shop window dates as the validity_window.
     - event_driven: one trend per distinct live event (fashion weeks, sport, celeb/OTT, viral moments) listed in the calendar or found in the live research.
-    - functional: one trend per distinct use-case (monsoon, work, travel/airport, college, resort). Use the seasonal window dates from the calendar.
+    - functional: MAXIMUM 5 functional trends total, one per use-case from this fixed list ONLY: (1) Monsoon Ready, (2) Airport Look / Travel, (3) Work from Office, (4) Back to College, (5) Resort Ready. Do NOT create functional trends outside this list. Do NOT create functional trends for vague use-cases like "layering" or "everyday". If a use-case is not in this list, classify it as attribute_driven instead.
 
     Do NOT merge distinct occasions. Do NOT invent festivals not in the calendar. Do NOT use vague windows like "July - October" — use the exact dates from the calendar.
 
@@ -147,12 +180,24 @@ agent3:
     - "attribute_driven": derived from product attributes - print, silhouette, colour, fabric, fit. The granular base layer. e.g. Florals, Wide-leg Trousers, Butter Yellow, Nudes & Earthy Tones, Linen.
     - "occasion_festival": tied to a recurring, predictable cultural occasion or festival or the wedding season. e.g. Diwali/Ethnic, Durga Puja, Raksha Bandhan, Eid, Christmas, Wedding Guest.
     - "event_driven": arising from a non-cyclic, unpredictable event - sporting events, celebrity appearances, fashion weeks, viral/OTT cultural moments. e.g. FIFA World Cup jerseys, Lakme Fashion Week silhouettes, celeb-worn styles, OTT show drops.
-    - "functional": use-case or life-moment driven, may span categories. e.g. Back to School/College, Monsoon Ready, Work from Office, Resort Ready, Airport Look.
+    - "functional": use-case or life-moment driven — the trend's CORE VALUE PROPOSITION is a specific activity or life context, not just a look. e.g. Monsoon Ready (rain protection), Work from Office (professional dress code), Airport Look (travel comfort), Back to School (uniform-adjacent).
 
     Decision priority (pick the FIRST that genuinely fits):
     1) occasion_festival -> 2) event_driven -> 3) functional -> 4) attribute_driven.
     attribute_driven is the FALLBACK: use it only when a trend is purely a look (a colour/silhouette/pattern/fabric) with no festival, event, or use-case framing.
     A provisional category is provided as a hint; correct it if it's wrong.
+
+    CRITICAL — do NOT over-classify as functional. A trend is functional ONLY if a shopper would choose it specifically because of an activity/occasion need, NOT just because it sounds practical:
+    - "Mob Wife Aesthetic" → attribute_driven (it is a look/vibe, not a use-case)
+    - "Cottagecore" → attribute_driven (it is an aesthetic, not a functional occasion)
+    - "Oversized Streetwear" → attribute_driven (it is a silhouette/style, not a use-case)
+    - "Y2K Revival" → attribute_driven (it is a nostalgic aesthetic)
+    - "Quiet Luxury" → attribute_driven (it is a styling ethos, not tied to a specific activity)
+    - "Athleisure" → attribute_driven (a silhouette/fabric category; only functional if framed as "Gym-to-Street" with a clear workout use-case)
+    - "Resort Ready" → functional ONLY if the raw_signal references beach/holiday travel; otherwise attribute_driven
+    - "Monsoon Ready" → functional (rain protection is the explicit use-case)
+    - "Airport Look" → functional (travel comfort is the explicit use-case)
+    When in doubt, default to attribute_driven over functional.
 
   classify: |
     Classify each trend into one of: attribute_driven, occasion_festival, event_driven, functional. Return one object per trend, echoing its index.

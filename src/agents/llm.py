@@ -21,6 +21,7 @@ API_TIMEOUT = int(os.getenv("GEMINI_TIMEOUT", "120"))  # seconds per call
 from google import genai
 from google.genai import types
 
+from . import prompts as _prompts
 from .observability import get_client
 
 DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-pro")
@@ -51,7 +52,10 @@ def _generate(prompt: str, config: types.GenerateContentConfig, name: str,
     """Call Gemini with retry/backoff; trace as a Langfuse generation if enabled."""
     lf = get_client()
     gen_cm = (
-        lf.start_as_current_generation(name=name, model=DEFAULT_MODEL, input=prompt)
+        lf.start_as_current_generation(
+            name=name, model=DEFAULT_MODEL, input=prompt,
+            metadata={"prompt_version": _prompts.version()},
+        )
         if lf is not None else None
     )
     if gen_cm is not None:
@@ -72,7 +76,9 @@ def _generate(prompt: str, config: types.GenerateContentConfig, name: str,
                 if lf is not None:
                     try:
                         lf.update_current_generation(
-                            output=getattr(resp, "text", None), usage_details=_usage(resp)
+                            output=getattr(resp, "text", None),
+                            usage_details=_usage(resp),
+                            metadata={"prompt_version": _prompts.version()},
                         )
                     except Exception:
                         pass

@@ -82,66 +82,76 @@ def _restore_model(prev: str) -> None:
     llm_mod.DEFAULT_MODEL = prev
 
 
-def evaluate_trends(trends: list[dict]) -> list[dict]:
-    """Add judge fields to each trend. Returns the same list, enriched.
+JUDGE_WORKERS = int(os.getenv("JUDGE_WORKERS", "8"))
 
-    Swaps to JUDGE_MODEL for the duration of evaluation, then restores
-    the original model so Agent 3 / other callers are unaffected.
-    """
+
+def _apply_judgements(t: dict, judgements: list) -> dict:
+    """Write judge result fields onto a trend dict. Returns the same dict."""
+    if not judgements:
+        t["judge_recommended"] = t.get("display_name", "")
+        t["judge_scores"] = "{}"
+        t["judge_top_score"] = 0.0
+        t["judge_flags"] = ""
+        t["judge_status"] = "error"
+        return t
+
+    judgements.sort(key=lambda j: j.overall_score, reverse=True)
+    approved_j = [j for j in judgements if j.verdict == "approve"]
+    best = approved_j[0] if approved_j else judgements[0]
+
+    scores_dict = {
+        j.name: {
+            "buzzword_authenticity": j.buzzword_authenticity,
+            "shopper_legibility": j.shopper_legibility,
+            "click_appeal": j.click_appeal,
+            "non_generic": j.non_generic,
+            "india_relevance": j.india_relevance,
+            "overall": round(j.overall_score, 2),
+            "verdict": j.verdict,
+            "reason": j.reason,
+        }
+        for j in judgements
+    }
+    t["judge_recommended"] = best.name
+    t["judge_scores"] = json.dumps(scores_dict, ensure_ascii=False)
+    t["judge_top_score"] = round(best.overall_score, 2)
+    t["judge_flags"] = ", ".join(j.name for j in judgements if j.verdict in ("flag", "reject"))
+    t["judge_status"] = "all_flagged" if all(j.verdict != "approve" for j in judgements) else "ok"
+    return t
+
+
+def evaluate_trends(trends: list[dict]) -> list[dict]:
+    """Add judge fields to each trend in parallel. Returns the same list, enriched."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     prev_model = _patch_model(JUDGE_MODEL)
-    print(f"[judge] evaluating {len(trends)} trends with model={JUDGE_MODEL}")
+    print(f"[judge] evaluating {len(trends)} trends with model={JUDGE_MODEL} "
+          f"(workers={JUDGE_WORKERS})")
 
     approved = flagged = rejected = errors = 0
 
     try:
-        for t in trends:
-            judgements = _judge_trend(t)
-            if not judgements:
-                t["judge_recommended"] = t.get("display_name", "")
-                t["judge_scores"] = "{}"
-                t["judge_top_score"] = 0.0
-                t["judge_flags"] = ""
-                t["judge_status"] = "error"
-                errors += 1
-                continue
-
-            # Sort by overall_score descending; pick best approved, else best overall
-            judgements.sort(key=lambda j: j.overall_score, reverse=True)
-            approved_j = [j for j in judgements if j.verdict == "approve"]
-            best = approved_j[0] if approved_j else judgements[0]
-
-            scores_dict = {
-                j.name: {
-                    "buzzword_authenticity": j.buzzword_authenticity,
-                    "shopper_legibility": j.shopper_legibility,
-                    "click_appeal": j.click_appeal,
-                    "non_generic": j.non_generic,
-                    "india_relevance": j.india_relevance,
-                    "overall": round(j.overall_score, 2),
-                    "verdict": j.verdict,
-                    "reason": j.reason,
-                }
-                for j in judgements
-            }
-
-            flag_names = [j.name for j in judgements if j.verdict in ("flag", "reject")]
-            all_bad = all(j.verdict != "approve" for j in judgements)
-
-            t["judge_recommended"] = best.name
-            t["judge_scores"] = json.dumps(scores_dict, ensure_ascii=False)
-            t["judge_top_score"] = round(best.overall_score, 2)
-            t["judge_flags"] = ", ".join(flag_names)
-            t["judge_status"] = "all_flagged" if all_bad else "ok"
-
-            # Verdict tally
-            for j in judgements:
-                if j.verdict == "approve":
-                    approved += 1
-                elif j.verdict == "flag":
-                    flagged += 1
+        with ThreadPoolExecutor(max_workers=JUDGE_WORKERS) as pool:
+            future_to_trend = {pool.submit(_judge_trend, t): t for t in trends}
+            for future in as_completed(future_to_trend):
+                t = future_to_trend[future]
+                try:
+                    judgements = future.result()
+                except Exception as e:
+                    print(f"  [judge] error on '{t.get('display_name', '')}': {e}")
+                    judgements = []
+                _apply_judgements(t, judgements)
+                if t["judge_status"] == "error":
+                    errors += 1
                 else:
-                    rejected += 1
-
+                    for j_name, j_data in json.loads(t["judge_scores"]).items():
+                        v = j_data.get("verdict")
+                        if v == "approve":
+                            approved += 1
+                        elif v == "flag":
+                            flagged += 1
+                        else:
+                            rejected += 1
     finally:
         _restore_model(prev_model)
 

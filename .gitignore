@@ -22,3 +22,9 @@ output/themes.csv
 output/normalized_rows.csv
 output/Impetus_output_as_input.csv
 output/trends_for_review.csv
+
+# OS / IDE
+.DS_Store
+
+# competitor/internal data
+*.xlsx

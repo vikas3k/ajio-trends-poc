@@ -71,14 +71,6 @@ _EVENTS: list[dict] = [
         "apparel_angle": "Festive kurtas, sherwanis, embroidered anarkalis, whites & pastels",
     },
     {
-        "name": "Guru Purnima",
-        "date": "2026-07-07",
-        "window_start": "2026-07-01",
-        "window_end": "2026-07-08",
-        "category": "occasion_festival",
-        "apparel_angle": "Subtle ethnic, cotton kurtas, understated occasionwear",
-    },
-    {
         "name": "Independence Day",
         "date": "2026-08-15",
         "window_start": "2026-08-10",
@@ -151,14 +143,6 @@ _EVENTS: list[dict] = [
         "apparel_angle": "Embellished ethnic (anarkalis, lehengas, kurta sets), gold/jewel tones, shimmer, gift sets",
     },
     {
-        "name": "Bhai Dooj",
-        "date": "2026-11-07",
-        "window_start": "2026-11-05",
-        "window_end": "2026-11-08",
-        "category": "occasion_festival",
-        "apparel_angle": "Ethnic casuals, brother-sister coordinated gifting looks",
-    },
-    {
         "name": "Chhath Puja",
         "date": "2026-11-09",
         "window_start": "2026-11-05",
@@ -225,6 +209,64 @@ _EVENTS: list[dict] = [
         "apparel_angle": "Pastel lehengas, light-weight ethnic, destination wedding outfits",
     },
 
+    # ── Additional festivals 2026 ────────────────────────────────────────────
+    {
+        "name": "Hariyali Teej",
+        "date": "2026-07-26",
+        "window_start": "2026-07-20",
+        "window_end": "2026-07-27",
+        "category": "occasion_festival",
+        "apparel_angle": "Green lehengas, salwar suits, ethnic sets — major North India shopping occasion, especially in UP/Delhi/Rajasthan",
+    },
+    {
+        "name": "Karwa Chauth",
+        "date": "2026-10-29",
+        "window_start": "2026-10-22",
+        "window_end": "2026-10-30",
+        "category": "occasion_festival",
+        "apparel_angle": "Bridal-adjacent red/pink lehengas and sarees, embellished ethnic, mehndi looks",
+    },
+    {
+        "name": "Dhanteras",
+        "date": "2026-11-03",
+        "window_start": "2026-10-28",
+        "window_end": "2026-11-04",
+        "category": "occasion_festival",
+        "apparel_angle": "Gold-toned ethnic, embellished kurta sets, festive occasionwear pre-Diwali",
+    },
+    {
+        "name": "Eid al-Fitr",
+        "date": "2027-03-20",
+        "window_start": "2027-03-10",
+        "window_end": "2027-03-21",
+        "category": "occasion_festival",
+        "apparel_angle": "Embroidered kurtas, sharara sets, pastel anarkalis, festive ethnic occasionwear",
+    },
+    {
+        "name": "Lohri",
+        "date": "2027-01-13",
+        "window_start": "2027-01-08",
+        "window_end": "2027-01-14",
+        "category": "occasion_festival",
+        "apparel_angle": "Phulkari dupattas, Punjabi suits, vibrant Patiala salwars, festive ethnic",
+    },
+    {
+        "name": "Back to College",
+        "date": "2026-07-15",
+        "window_start": "2026-07-01",
+        "window_end": "2026-08-15",
+        "category": "functional",
+        "apparel_angle": "Campus casuals, graphic tees, joggers, denim, co-ords, backpack-friendly everyday looks",
+    },
+    {
+        "name": "Work from Office (Post-Monsoon Refresh)",
+        "date": "2026-10-01",
+        "window_start": "2026-09-15",
+        "window_end": "2026-11-30",
+        "category": "functional",
+        "apparel_angle": "Smart casuals, blazers, trousers, polished co-ords, office-to-dinner outfits",
+    },
+
     # ── Key retail / fashion events ─────────────────────────────────────────
     {
         "name": "India Couture Week",
@@ -248,7 +290,31 @@ _EVENTS: list[dict] = [
         "window_start": "2026-05-15",
         "window_end": "2026-07-15",
         "category": "event_driven",
-        "apparel_angle": "Sporty fan dressing, team jerseys, athleisure, Indo-sporty fusion",
+        "apparel_angle": "Sporty fan dressing, India team jerseys (blue), athleisure, Indo-sporty fusion, 'Bleed Blue' moment",
+    },
+    {
+        "name": "FIFA World Cup 2026",
+        "date": "2026-06-11",
+        "window_start": "2026-06-01",
+        "window_end": "2026-07-19",
+        "category": "event_driven",
+        "apparel_angle": "Football jerseys, sporty streetwear, fan dressing, global team colours, football-core aesthetic",
+    },
+    {
+        "name": "IPL 2027 Season",
+        "date": "2027-03-25",
+        "window_start": "2027-03-15",
+        "window_end": "2027-05-25",
+        "category": "event_driven",
+        "apparel_angle": "IPL team jerseys, cricket fan wear, sporty co-ords, stadium looks, franchise colour palettes",
+    },
+    {
+        "name": "Bollywood / OTT Celeb Moments",
+        "date": "2026-07-01",
+        "window_start": "2026-06-01",
+        "window_end": "2027-05-31",
+        "category": "event_driven",
+        "apparel_angle": "Celeb-inspired looks from major OTT drops, film releases, award shows — viral outfit recreations on AJIO",
     },
 ]
 

@@ -36,9 +36,9 @@ OUT_DIR = Path("output")
 
 
 def main() -> None:
-    trending_only = "--all" not in sys.argv[1:]
+    trending_only = "--trending" in sys.argv[1:]  # default: all rows; --trending = Impetus-flagged only
     print(f"Langfuse tracing: {'ON' if langfuse_enabled() else 'off (no keys)'}")
-    print(f"Scope: {'trending rows only' if trending_only else 'all rows'}\n")
+    print(f"Scope: {'trending rows only' if trending_only else 'all rows (fix1 enabled)'}\n")
 
     graph = build_graph()
     final = graph.invoke({"input_path": str(INPUT), "trending_only": trending_only})
@@ -71,6 +71,16 @@ def main() -> None:
             f"{label} | velocity={velocity:.4f} | {basis}"
             if basis else label
         )
+
+        # Bucket rank: best (lowest number) rank among member combos.
+        # For LLM-sourced trends with no member combos, left blank.
+        member_combos = [combo_lookup.get(c, {}) for c in member_ids if c in combo_lookup]
+        ranked = [c for c in member_combos if c.get("bucket_rank")]
+        bucket_rank = min((c["bucket_rank"] for c in ranked), default="")
+        bucket_size = ranked[0]["bucket_size"] if ranked else ""
+        bucket_label = ranked[0].get("bucket_label", "") if ranked else ""
+        rank_basis = ranked[0].get("rank_basis", "") if ranked else ""
+
         rows.append({
             "trend_id": t.get("trend_id", ""),
             "trend_name": t["display_name"],
@@ -79,6 +89,10 @@ def main() -> None:
             "reviewer": t.get("reviewer", ""),
             "trend_category": t.get("trend_category", ""),
             "lifecycle_stage": t.get("lifecycle_stage", ""),
+            "bucket_label": bucket_label,
+            "bucket_rank": bucket_rank,
+            "bucket_size": bucket_size,
+            "rank_basis": rank_basis,
             "momentum_label": label,
             "momentum_basis": basis,
             "velocity_score": velocity,
@@ -124,12 +138,12 @@ def main() -> None:
         df["_o"] = df["trend_category"].map({c: i for i, c in enumerate(order)}).fillna(9)
         with pd.option_context("display.max_rows", None, "display.width", 300,
                                "display.max_colwidth", 40):
-            print(df.sort_values("_o")[["trend_name", "trend_category", "source",
-                                        "momentum_label", "velocity_score",
-                                        "gtrends_score", "gtrends_momentum",
-                                        "judge_recommended", "judge_top_score",
-                                        "judge_status", "lifecycle_stage",
-                                        "review_status"]].to_string(index=False))
+            print(df.sort_values(["bucket_label", "bucket_rank"])[
+                ["bucket_label", "bucket_rank", "bucket_size", "trend_name",
+                 "trend_category", "source", "momentum_label",
+                 "judge_recommended", "judge_top_score",
+                 "lifecycle_stage", "review_status"]
+            ].to_string(index=False))
 
 
 if __name__ == "__main__":

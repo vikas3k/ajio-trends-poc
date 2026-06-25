@@ -165,6 +165,23 @@ def run(state: AgentState) -> AgentState:
         # Positive = demand accelerating relative to current level.
         rec["velocity_score"] = round(_compute_velocity(g), 4)
 
+        # Bucket ranking signals — all directly from Impetus's normalized scores.
+        # Predicted_Score_NMo is a popularity share (0-1, sums to 1 per forecast
+        # month across all trends), so comparing within a bucket is meaningful.
+        pred1  = pd.to_numeric(g["Predicted_Score_1Mo"], errors="coerce")
+        pred2  = pd.to_numeric(g["Predicted_Score_2Mo"], errors="coerce")
+        pred3  = pd.to_numeric(g["Predicted_Score_3Mo"], errors="coerce")
+        pred4  = pd.to_numeric(g["Predicted_Score_4Mo"], errors="coerce")
+        sc1    = pd.to_numeric(g["Score_Change_1Mo"],    errors="coerce")
+        conf   = pd.to_numeric(g["Confidence_Score"],    errors="coerce")
+        mean_4mo = pd.concat([pred1, pred2, pred3, pred4], axis=1).mean(axis=1).mean()
+        rec["_rank_pred1mo"]      = float(pred1.mean())        # near-term forecast (w=0.4)
+        rec["_rank_mean4mo"]      = float(mean_4mo)            # sustained 4-month strength (w=0.3)
+        rec["_rank_score_change"] = float(sc1.mean())          # current momentum (w=0.2)
+        rec["_rank_confidence"]   = float(conf.mean())         # forecast reliability (w=0.1)
+        # Subcategory for bucket key (raw column, before normalization mapping)
+        rec["_subcategory"] = g["Subcategory"].astype(str).str.strip().mode().iat[0] if not g.empty else ""
+
         # Category context: how this combo compares to its Gender x Category bucket.
         bucket = cat_stats.get((rec.get("gender", ""), rec.get("category", "")), {})
         if bucket:
@@ -186,9 +203,68 @@ def run(state: AgentState) -> AgentState:
             rec["category_context"] = ""
         records.append(rec)
 
-    # Sort by velocity first (fastest accelerators), then by count as tiebreaker.
-    records.sort(key=lambda r: (r["velocity_score"], r["count"]), reverse=True)
-    # Assign velocity rank after sorting (1 = fastest accelerating combo).
+    # ── Bucket ranking: Gender × Subcategory ────────────────────────────────
+    # Rank each combo within its (gender, subcategory) bucket using four
+    # Impetus signals (equal weight, all transparent and directly from the data):
+    #   1. final_score          — current demand strength (brand-adjusted)
+    #   2. breakout_probability — near-term breakout chance (1-month horizon)
+    #   3. score_change_1mo     — momentum direction
+    #   4. confidence_score     — forecast reliability
+    # Each signal is min-max normalised within its bucket so they're on the
+    # same 0-1 scale before averaging.  rank_basis shows the raw values so
+    # the rank is fully explainable.
+    from collections import defaultdict
+    import math
+
+    def _minmax(vals: list[float]) -> list[float]:
+        lo, hi = min(vals), max(vals)
+        if math.isclose(lo, hi):
+            return [0.5] * len(vals)
+        return [(v - lo) / (hi - lo) for v in vals]
+
+    bucket_groups: dict[tuple, list[dict]] = defaultdict(list)
+    for rec in records:
+        key = (rec.get("gender", ""), rec.get("_subcategory", ""))
+        bucket_groups[key].append(rec)
+
+    for (gender, subcat), grp in bucket_groups.items():
+        for sig in ("_rank_pred1mo", "_rank_mean4mo",
+                    "_rank_score_change", "_rank_confidence"):
+            vals = [r[sig] if not math.isnan(r[sig]) else 0.0 for r in grp]
+            normed = _minmax(vals)
+            for rec, nv in zip(grp, normed):
+                rec[f"{sig}_n"] = nv
+
+        for rec in grp:
+            # Weighted: near-term forecast 40%, sustained 4mo 30%, momentum 20%, confidence 10%
+            rec["bucket_rank_score"] = round(
+                0.4 * rec["_rank_pred1mo_n"] +
+                0.3 * rec["_rank_mean4mo_n"] +
+                0.2 * rec["_rank_score_change_n"] +
+                0.1 * rec["_rank_confidence_n"], 4
+            )
+            rec["rank_basis"] = (
+                f"predicted_score_1mo={rec['_rank_pred1mo']:.4f} (w=0.4) | "
+                f"mean_4mo_score={rec['_rank_mean4mo']:.4f} (w=0.3) | "
+                f"score_change={rec['_rank_score_change']:+.4f} (w=0.2) | "
+                f"confidence={rec['_rank_confidence']:.4f} (w=0.1)"
+            )
+
+        grp.sort(key=lambda r: r["bucket_rank_score"], reverse=True)
+        for rank, rec in enumerate(grp, 1):
+            rec["bucket_rank"] = rank
+            rec["bucket_size"] = len(grp)
+            rec["bucket_label"] = f"{gender} × {subcat}"
+
+    # Clean up temp working columns
+    for rec in records:
+        for col in ("_rank_pred1mo", "_rank_mean4mo", "_rank_score_change", "_rank_confidence",
+                    "_rank_pred1mo_n", "_rank_mean4mo_n", "_rank_score_change_n",
+                    "_rank_confidence_n", "_subcategory"):
+            rec.pop(col, None)
+
+    # Sort globally by bucket_rank_score for display; velocity_rank preserved as secondary.
+    records.sort(key=lambda r: r.get("bucket_rank_score", 0), reverse=True)
     for rank, rec in enumerate(records, 1):
         rec["velocity_rank"] = rank
     velocities = [r["velocity_score"] for r in records]
@@ -198,6 +274,14 @@ def run(state: AgentState) -> AgentState:
     print(f"[agent1] {len(scope):,} rows in scope -> {len(records)} cleaned attribute combos")
     print(f"[agent1] velocity_score: {len(nonzero)}/{len(records)} combos accelerating, "
           f"top3={[round(v, 4) for v in velocities[:3]]}")
+    print(f"[agent1] bucket rankings (Gender x Subcategory, top combo per bucket):")
+    shown = set()
+    for rec in records:
+        lbl = rec.get("bucket_label", "")
+        if lbl and lbl not in shown:
+            shown.add(lbl)
+            print(f"  {lbl}: {rec.get('bucket_size',0)} combos | "
+                  f"#1 score={rec.get('bucket_rank_score',0):.3f} | {rec.get('rank_basis','')}")
     print(f"[agent1] category baselines (Gender x Category):")
     for (gender, cat), stats in sorted(cat_stats.items()):
         print(f"  {gender} x {cat}: mean_score={stats['cat_mean_score']}, "

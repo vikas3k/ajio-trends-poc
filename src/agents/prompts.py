@@ -35,8 +35,16 @@ def _data() -> dict:
 
     out = {}
     for section, vals in raw.items():
-        out[section] = {k: inline(v) for k, v in vals.items()} if isinstance(vals, dict) else vals
+        if isinstance(vals, dict):
+            out[section] = {k: inline(v) for k, v in vals.items()}
+        else:
+            out[section] = vals
     return out
+
+
+def version() -> str:
+    """Return the current prompt version string (top-level 'version:' in prompts.yaml)."""
+    return str(_data().get("version", "unknown"))
 
 
 def get(path: str) -> str:
