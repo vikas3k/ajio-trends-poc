@@ -8,18 +8,22 @@ Usage:
     from agents.gtrends import validate_trends
     trends = validate_trends(trends)   # adds gtrends_score, gtrends_momentum, gtrends_term
 
-Rate limiting: Google Trends allows ~1 request per 5s. This module batches up to
-5 terms per call and sleeps between calls. If rate-limited, it marks affected
-trends as gtrends_status="unavailable" and continues — the pipeline never blocks.
+Rate limiting strategy:
+  1. Cross-run cache in trend_store.json — only NEW trends (never queried before)
+     are sent to Google Trends. Returning trends reuse cached scores.
+  2. Increased sleep (15s between batches) for the new-trends queries.
+  3. If still rate-limited, marks affected trends as gtrends_status="rate_limited"
+     and continues — the pipeline never blocks.
 
-Caches within a run so the same term is never queried twice.
+This reduces queries from ~145/run to ~10-20/run (only new trends each week).
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 import warnings
-from typing import Optional
+from pathlib import Path
 
 warnings.filterwarnings("ignore")  # suppress urllib3 LibreSSL warning
 
@@ -30,12 +34,18 @@ try:
 except ImportError:
     pass
 
-# India locale, IST (UTC+5:30 = 330 min), Fashion & Style category
+# India locale, IST (UTC+5:30 = 330 min)
 _GEO = "IN"
 _CAT = 0          # 185 = Fashion & Style, but returns empty too often; 0 = all categories
 _TIMEFRAME = "today 3-m"
 _BATCH_SIZE = 5   # pytrends max per call
-_SLEEP_S = 6      # seconds between batches (stay under rate limit)
+_SLEEP_S = 15     # seconds between batches — increased from 6 to avoid rate limiting
+
+# Cross-run gtrends cache lives alongside the lifecycle store.
+_GTRENDS_CACHE_FILE = Path("output/gtrends_cache.json")
+
+# Re-query cached results after this many days (trends can go stale).
+_CACHE_TTL_DAYS = 7
 
 # Thresholds for momentum classification
 _RISE_THRESHOLD = 1.15   # recent avg > baseline * this -> rising
@@ -117,84 +127,139 @@ def _best_term(trend: dict) -> str:
     return _clean_term(name)
 
 
+def _load_cache() -> dict:
+    """Load cross-run gtrends cache from disk."""
+    if _GTRENDS_CACHE_FILE.exists():
+        try:
+            return json.loads(_GTRENDS_CACHE_FILE.read_text())
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_cache(cache: dict) -> None:
+    """Persist gtrends cache to disk."""
+    _GTRENDS_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    _GTRENDS_CACHE_FILE.write_text(json.dumps(cache, indent=1))
+
+
+def _cache_is_fresh(entry: dict) -> bool:
+    """Return True if cached entry is within TTL."""
+    import datetime
+    queried = entry.get("queried_on", "")
+    if not queried:
+        return False
+    try:
+        age = (datetime.date.today() - datetime.date.fromisoformat(queried)).days
+        return age < _CACHE_TTL_DAYS
+    except ValueError:
+        return False
+
+
 def validate_trends(
     trends: list[dict],
     skip_sources: tuple[str, ...] = ("llm",),
 ) -> list[dict]:
     """Add gtrends_score, gtrends_momentum, gtrends_term, gtrends_status to each trend.
 
-    LLM/calendar trends are skipped by default (no Impetus signal to validate).
-    Trends from impetus/social_crawl get queried.
-
-    Args:
-        trends: list of trend dicts from Agent 2 / postprocess.
-        skip_sources: sources to skip (default: llm only).
+    Only queries Google Trends for trends not already in the cross-run cache
+    (or whose cache entry is older than _CACHE_TTL_DAYS). This keeps queries
+    to ~10-20/run instead of 145, avoiding rate limiting.
     """
+    import datetime
+
+    # Stamp defaults for all trends first.
+    for t in trends:
+        t.setdefault("gtrends_score", 0.0)
+        t.setdefault("gtrends_momentum", "unavailable")
+        t.setdefault("gtrends_term", "")
+        t.setdefault("gtrends_status", "unavailable")
+
     if not _PYTRENDS_AVAILABLE:
         print("[gtrends] pytrends not installed — skipping validation")
-        for t in trends:
-            t.setdefault("gtrends_score", 0.0)
-            t.setdefault("gtrends_momentum", "unavailable")
-            t.setdefault("gtrends_term", "")
-            t.setdefault("gtrends_status", "unavailable")
         return trends
 
-    pt = _TrendReq(hl="en-IN", tz=330, timeout=(10, 25))
+    # Load cross-run cache.
+    disk_cache = _load_cache()
+    today_s = datetime.date.today().isoformat()
 
-    # Build term -> trend mapping; skip LLM sources
-    term_map: dict[str, str] = {}   # term -> trend display_name (for lookup)
-    skipped: set[str] = set()
+    # Separate trends into: use cache vs need fresh query.
+    to_query: list[dict] = []
+    cache_hits = 0
+    skipped = 0
+
     for t in trends:
-        name = t.get("display_name", "") or t.get("trend_name", "")
         if t.get("source", "") in skip_sources:
-            skipped.add(name)
+            t["gtrends_momentum"] = "skipped"
+            t["gtrends_status"] = "skipped (llm)"
+            skipped += 1
             continue
+
         term = _best_term(t)
-        if term:
-            term_map[term] = name
+        t["gtrends_term"] = term
 
-    unique_terms = list(dict.fromkeys(term_map))  # deduplicated, order preserved
-    cache: dict[str, tuple[float, str]] = {}
+        cached = disk_cache.get(term)
+        if cached and _cache_is_fresh(cached):
+            # Restore from cache.
+            t["gtrends_score"]    = cached["score"]
+            t["gtrends_momentum"] = cached["momentum"]
+            t["gtrends_status"]   = cached["status"]
+            cache_hits += 1
+        else:
+            to_query.append(t)
 
-    print(f"[gtrends] querying {len(unique_terms)} terms "
-          f"({len(skipped)} LLM trends skipped) ...")
+    print(f"[gtrends] {cache_hits} from cache | {len(to_query)} to query | "
+          f"{skipped} skipped (llm)")
 
-    # Query in batches of _BATCH_SIZE
+    if not to_query:
+        print("[gtrends] all trends served from cache — no API calls needed")
+        return trends
+
+    # Query only the uncached / stale trends.
+    pt = _TrendReq(hl="en-IN", tz=330, timeout=(10, 25))
+    unique_terms = list(dict.fromkeys(t["gtrends_term"] for t in to_query if t["gtrends_term"]))
+    run_cache: dict[str, tuple[float, str]] = {}
+
+    print(f"[gtrends] querying {len(unique_terms)} new terms (sleep={_SLEEP_S}s between batches) ...")
     for i in range(0, len(unique_terms), _BATCH_SIZE):
         batch = unique_terms[i: i + _BATCH_SIZE]
         results = _query_batch(pt, batch)
-        cache.update(results)
+        run_cache.update(results)
         statuses = set(v[1] for v in results.values())
         print(f"  batch {i // _BATCH_SIZE + 1}: {batch} -> {statuses}")
         if i + _BATCH_SIZE < len(unique_terms):
             time.sleep(_SLEEP_S)
 
-    # Attach results back to trends
-    for t in trends:
-        name = t.get("display_name", "") or t.get("trend_name", "")
-        if name in skipped:
-            t["gtrends_score"] = 0.0
-            t["gtrends_momentum"] = "skipped"
-            t["gtrends_term"] = ""
-            t["gtrends_status"] = "skipped (llm)"
-            continue
-
-        term = _best_term(t)
-        score, momentum = cache.get(term, (0.0, "no_data"))
-        t["gtrends_score"] = score
-        t["gtrends_momentum"] = momentum
-        t["gtrends_term"] = term
-        t["gtrends_status"] = (
+    # Attach results and update disk cache.
+    for t in to_query:
+        term = t["gtrends_term"]
+        score, momentum = run_cache.get(term, (0.0, "no_data"))
+        status = (
             "ok" if momentum not in ("no_data", "unavailable", "rate_limited", "niche")
             else momentum
         )
+        t["gtrends_score"]    = score
+        t["gtrends_momentum"] = momentum
+        t["gtrends_status"]   = status
+
+        # Only cache successful results — don't cache rate_limited/unavailable.
+        if momentum not in ("rate_limited", "unavailable"):
+            disk_cache[term] = {
+                "score":      score,
+                "momentum":   momentum,
+                "status":     status,
+                "queried_on": today_s,
+            }
+
+    _save_cache(disk_cache)
 
     # Summary
-    ok = sum(1 for t in trends if t.get("gtrends_status") == "ok")
-    rising = sum(1 for t in trends if t.get("gtrends_momentum") == "rising")
+    ok      = sum(1 for t in trends if t.get("gtrends_status") == "ok")
+    rising  = sum(1 for t in trends if t.get("gtrends_momentum") == "rising")
     falling = sum(1 for t in trends if t.get("gtrends_momentum") == "falling")
-    niche = sum(1 for t in trends if t.get("gtrends_momentum") == "niche")
-    print(f"[gtrends] validation done: {ok} ok | {rising} rising | "
-          f"{falling} falling | {niche} niche/low-signal")
+    niche   = sum(1 for t in trends if t.get("gtrends_momentum") == "niche")
+    rl      = sum(1 for t in trends if t.get("gtrends_momentum") == "rate_limited")
+    print(f"[gtrends] done: {ok} ok | {rising} rising | {falling} falling | "
+          f"{niche} niche | {rl} rate_limited | cache size={len(disk_cache)}")
 
     return trends

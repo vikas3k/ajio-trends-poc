@@ -16,6 +16,7 @@
 # VERSIONING: bump `version` whenever any prompt text changes. The version is
 # stamped on every Langfuse generation trace so prompt iterations are queryable.
 version: "v1.3"
+#- Live events driving fashion RIGHT NOW (mid-2026): FIFA World Cup 2026 (Jun-Jul, football-core jerseys & fan dressing), ICC T20 World Cup 2026 (Jun-Jul, Bleed Blue / cricket fan wear), India Couture Week (Jul), Lakme Fashion Week (Oct). These are major event_driven trend sources.
 
 shared:
   curated_brief: |
@@ -25,7 +26,6 @@ shared:
     - Fabric/construction trends AS STANDALONE TRENDS: Linen Everything, Crochet Moment, Broderie Anglaise, Satin Slip, Sheer Chiffon.
     - Real buzzwords customers recognise: 'Korean Pants', 'Butter Yellow', 'Quiet Luxury', 'Mob Wife Aesthetic', 'Resort Ready', 'Airport Look', 'Old Money', 'Coquette', 'Cottagecore', 'Tenniscore', 'Clean Girl Aesthetic', 'Cobalt Blue', 'Mocha Girl', 'Linen Everything', 'Celestial Core', 'Jorts Season'.
     - Indian retail calendar: summer/high-summer (Apr-Jun: cotton/linen, resort), monsoon (Jun-Sep: quick-dry/functional), festive & wedding season (Aug-Nov: Raksha Bandhan, Onam, Navratri, Durga Puja, Diwali; then Nov-Feb weddings) driving ethnic/occasion/embellished wear.
-    - Live events driving fashion RIGHT NOW (mid-2026): FIFA World Cup 2026 (Jun-Jul, football-core jerseys & fan dressing), ICC T20 World Cup 2026 (Jun-Jul, Bleed Blue / cricket fan wear), India Couture Week (Jul), Lakme Fashion Week (Oct). These are major event_driven trend sources.
 
   naming_principles: |
     NAMING PRINCIPLES (mandatory - PRD):
@@ -54,7 +54,6 @@ agent2:
     You extract a dictionary of CURRENT, real, circulating fashion buzzwords (the kind customers actually see on Instagram/Pinterest/YouTube/Vogue India), each mapped to the apparel attributes it implies and its likely trend category. For each buzzword, judge from the live research how LIVE it is right now (recency: hot/rising/evergreen/niche) and how confident you are it is genuinely circulating (confidence: high/medium/low), and cite the evidence (where it shows up). Only include buzzwords a real Indian shopper would plausibly recognise - do NOT invent phrases.
 
   attr_system: |
-    You are a fashion trend editor for Reliance AJIO (India). You GROUP cleaned apparel attribute combinations from the catalogue into attribute-driven trends and NAME each one buzzword-first.
 
     <<naming_principles>>
 
@@ -83,9 +82,9 @@ agent2:
     From this live research, extract a dictionary of CURRENT real circulating fashion buzzwords for the Indian market. For each: the buzzword, what apparel attributes/look it maps to, its likely trend category (attribute_driven | occasion_festival | event_driven | functional), and a short note.
 
     You MUST include buzzwords across ALL four categories — do not only extract aesthetic buzzwords. Specifically ensure you include:
-    - At least 2-3 event_driven buzzwords (e.g. FIFA / football-core, Bleed Blue, cricket fan wear, couture-inspired looks, celeb/OTT moments)
-    - At least 2-3 functional buzzwords (e.g. Monsoon Ready, Airport Look, Office Siren)
-    - At least 4-5 attribute_driven buzzwords (the aesthetics and vibes)
+    - At least 20 event_driven buzzwords (e.g. FIFA / football-core, Bleed Blue, cricket fan wear, couture-inspired looks, celeb/OTT moments)
+    - At least 20 functional buzzwords (e.g. Monsoon Ready, Airport Look, Office Siren)
+    - At least 40 attribute_driven buzzwords (the aesthetics and vibes)
 
     RESEARCH:
     {brief}

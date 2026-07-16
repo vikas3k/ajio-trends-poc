@@ -27,7 +27,7 @@ load_dotenv()  # pull Vertex + Langfuse config from .env before anything reads e
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 from agents.graph import build_graph  # noqa: E402
 from agents.observability import flush, langfuse_enabled  # noqa: E402
-from agents.postprocess import apply_lifecycle, enrich_trends  # noqa: E402
+from agents.postprocess import apply_lifecycle, enrich_trends, dedup_trend_names, apply_judge_floor, check_buzzword_coverage, rank_trends  # noqa: E402
 from agents.gtrends import validate_trends  # noqa: E402
 from agents.judge import evaluate_trends  # noqa: E402
 
@@ -48,12 +48,18 @@ def main() -> None:
     combo_lookup = {r["combo_id"]: r for r in final.get("cleaned_records", [])}
     OUT_DIR.mkdir(exist_ok=True)
 
+    buzzwords = final.get("buzzwords", [])
+
     # Generation-side post-processing: momentum + validity + buzzword evidence +
     # review fields, then cross-run dedup + lifecycle against a persisted store.
-    trends = enrich_trends(trends, combo_lookup, final.get("buzzwords", []))
+    trends = enrich_trends(trends, combo_lookup, buzzwords)
+    trends = dedup_trend_names(trends)          # guardrail 1: remove duplicate names
     trends = validate_trends(trends)
     trends = apply_lifecycle(trends, OUT_DIR / "trend_store.json")
     trends = evaluate_trends(trends)
+    trends = apply_judge_floor(trends)          # guardrail 2: flag low-scoring names
+    check_buzzword_coverage(trends, buzzwords)  # guardrail 3: log unused buzzwords
+    trends = rank_trends(trends)               # global + category ranking
 
     # PRD-shaped trend catalogue (one record per trend, with §5.2 metadata).
     rows = []
@@ -83,6 +89,9 @@ def main() -> None:
 
         rows.append({
             "trend_id": t.get("trend_id", ""),
+            "global_rank": t.get("global_rank", ""),
+            "category_rank": t.get("category_rank", ""),
+            "rank_score": t.get("rank_score", ""),
             "trend_name": t["display_name"],
             "approved_name": t.get("approved_name", ""),
             "review_status": t.get("review_status", ""),
@@ -92,7 +101,7 @@ def main() -> None:
             "bucket_label": bucket_label,
             "bucket_rank": bucket_rank,
             "bucket_size": bucket_size,
-            "rank_basis": rank_basis,
+            "rank_basis": t.get("rank_basis", rank_basis),
             "momentum_label": label,
             "momentum_basis": basis,
             "velocity_score": velocity,

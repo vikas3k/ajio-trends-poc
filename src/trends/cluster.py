@@ -4,7 +4,7 @@ themes for naming.
 No invented scoring. "Trending" is decided purely by the signal columns Impetus
 already provides and defines:
     - Alert_Type == "Breakout Star" or "Consistently Rising"
-    - Recent_Momentum == "Rising"
+    - Recent_Momentum > MOMENTUM_THRESHOLD  (numeric in this export)
 
 A *theme* is a cluster of trending rows that share the same coarse signature:
     (Gender, Subcategory family, Style family, Colour family)
@@ -23,15 +23,31 @@ DEFAULT_KEYS = [
     "n_gender", "subcat_family", "style_family", "color_family",
 ]
 
-# Impetus's own "this is emerging/trending" labels — no math of ours involved.
+# Impetus's own "this is emerging/trending" alerts.
 _TRENDING_ALERTS = {"breakout star", "consistently rising"}
+
+# Recent_Momentum is numeric in this export (Score_Change_1Mo / Current_Score).
+# Values <= this are noise (zero, rounding, or very slow drift).
+# Top ~31% of rows are above 0.01 — a meaningful acceleration signal.
+MOMENTUM_THRESHOLD = 0.01
 
 
 def is_trending(df: pd.DataFrame) -> pd.Series:
     """Boolean mask: rows Impetus itself flags as trending/emerging."""
     alert = df["Alert_Type"].str.strip().str.lower()
-    momentum = df["Recent_Momentum"].str.strip().str.lower()
-    return alert.isin(_TRENDING_ALERTS) | momentum.eq("rising")
+    alert_flag = alert.isin(_TRENDING_ALERTS)
+
+    # Handle both numeric exports and legacy text exports ("Rising").
+    mom_raw = df["Recent_Momentum"].str.strip()
+    mom_numeric = pd.to_numeric(mom_raw, errors="coerce")
+    if mom_numeric.notna().mean() > 0.5:
+        # Numeric export: use threshold
+        momentum_flag = mom_numeric > MOMENTUM_THRESHOLD
+    else:
+        # Legacy text export: match "Rising" label
+        momentum_flag = mom_raw.str.lower().eq("rising")
+
+    return alert_flag | momentum_flag
 
 
 def _count(s: pd.Series, *values: str) -> int:

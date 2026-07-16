@@ -147,10 +147,17 @@ def run(state: AgentState) -> AgentState:
         # Transparent momentum breakdown straight from Impetus's own labels,
         # so downstream momentum is explainable (not a black-box score).
         al = g["Alert_Type"].astype(str).str.strip().str.lower()
-        mom = g["Recent_Momentum"].astype(str).str.strip().str.lower()
         rec["n_consistently_rising"] = int((al == "consistently rising").sum())
         rec["n_breakout_star"] = int((al == "breakout star").sum())
-        rec["n_rising_momentum"] = int((mom == "rising").sum())
+        # Recent_Momentum is numeric in current exports; fall back to text for legacy.
+        from trends.cluster import MOMENTUM_THRESHOLD
+        mom_numeric = pd.to_numeric(g["Recent_Momentum"], errors="coerce")
+        if mom_numeric.notna().mean() > 0.5:
+            rec["n_rising_momentum"] = int((mom_numeric > MOMENTUM_THRESHOLD).sum())
+        else:
+            rec["n_rising_momentum"] = int(
+                g["Recent_Momentum"].astype(str).str.strip().str.lower().eq("rising").sum()
+            )
         rec["sample_trend_ids"] = g["Trend_ID"].head(5).tolist()
         # Impetus forecast signals for validity window derivation in postprocess.
         # peak_month: latest peak across member rows (most conservative end-date).

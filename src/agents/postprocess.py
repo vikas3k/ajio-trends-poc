@@ -174,6 +174,106 @@ def enrich_trends(trends: list[dict], combo_lookup: dict, buzzwords: list[dict],
     return out
 
 
+# --- 1b. guardrails --------------------------------------------------------
+
+def dedup_trend_names(trends: list[dict]) -> list[dict]:
+    """Remove duplicate trend names produced by parallel batches.
+
+    Keeps the copy with more member_combo_ids (richer signal). Logs every
+    merge so the loss is visible in the run log.
+    """
+    seen: dict[str, dict] = {}
+    for t in trends:
+        key = _slug(t.get("display_name", ""))
+        if not key:
+            continue
+        if key not in seen:
+            seen[key] = t
+        else:
+            existing = seen[key]
+            existing_n = len(existing.get("member_combo_ids") or [])
+            current_n  = len(t.get("member_combo_ids") or [])
+            if current_n > existing_n:
+                print(f"[guardrail] dedup: keeping richer copy of '{t.get('display_name','')}' "
+                      f"({current_n} combos vs {existing_n})")
+                seen[key] = t
+            else:
+                print(f"[guardrail] dedup: dropping duplicate '{t.get('display_name','')}' "
+                      f"({current_n} combos, keeping {existing_n}-combo copy)")
+
+    result = list(seen.values())
+    dropped = len(trends) - len(result)
+    if dropped:
+        print(f"[guardrail] dedup: removed {dropped} duplicate trend name(s), "
+              f"{len(result)} unique trends remain")
+    else:
+        print(f"[guardrail] dedup: no duplicate names found ({len(result)} trends)")
+    return result
+
+
+JUDGE_SCORE_FLOOR = 2.5   # trends below this score get flagged for review
+
+
+def apply_judge_floor(trends: list[dict]) -> list[dict]:
+    """Flag trends whose best judge score is below JUDGE_SCORE_FLOOR.
+
+    Sets review_status = 'needs_review' so they surface in the review app
+    without being silently dropped. Trends with no judge data are left as-is.
+    """
+    flagged = 0
+    for t in trends:
+        score = t.get("judge_top_score")
+        if score is None or score == "":
+            continue
+        try:
+            score = float(score)
+        except (TypeError, ValueError):
+            continue
+        if score < JUDGE_SCORE_FLOOR:
+            t["review_status"] = "needs_review"
+            flagged += 1
+
+    print(f"[guardrail] judge floor ({JUDGE_SCORE_FLOOR}): "
+          f"{flagged} trend(s) marked needs_review")
+    return trends
+
+
+def check_buzzword_coverage(trends: list[dict], buzzwords: list[dict]) -> None:
+    """Log buzzword coverage: which buzzwords were used, which were missed.
+
+    A buzzword is "used" if it appears in any trend's display_name, candidate_names,
+    or matched_buzzword. Unused buzzwords are potential missed trend signals.
+    """
+    if not buzzwords:
+        return
+
+    # Build a set of all name tokens across all trends (lowercased slugs).
+    used_tokens: set[str] = set()
+    for t in trends:
+        for name in [t.get("display_name", ""), t.get("matched_buzzword", "")] \
+                    + (t.get("candidate_names") or []):
+            used_tokens.add(_slug(name))
+
+    used: list[str] = []
+    unused: list[str] = []
+    for b in buzzwords:
+        bw = b.get("buzzword", "")
+        if _slug(bw) in used_tokens:
+            used.append(bw)
+        else:
+            unused.append(bw)
+
+    pct = int(100 * len(used) / len(buzzwords)) if buzzwords else 0
+    print(f"\n[guardrail] buzzword coverage: {len(used)}/{len(buzzwords)} buzzwords "
+          f"used in trend names ({pct}%)")
+    if used:
+        print(f"  used    : {', '.join(used)}")
+    if unused:
+        print(f"  UNUSED  : {', '.join(unused)}")
+        print(f"  ^ these buzzwords had no matching trend — consider adding them to prompts "
+              f"or they may indicate missing trend coverage")
+
+
 # --- 2. dedup within run + lifecycle across runs ---------------------------
 
 # Thresholds for lifecycle stage transitions.
@@ -281,3 +381,153 @@ def apply_lifecycle(trends: list[dict], store_path: Path,
               f"{', '.join(expired_names[:5])}" + (" ..." if len(expired_names) > 5 else ""))
 
     return out
+
+
+# --- 3. ranking ------------------------------------------------------------
+
+# Weights for the composite ranking score.
+# Signals with no data for a trend (e.g. LLM-sourced trends have no
+# bucket_rank_score) are replaced with 0 so they don't block ranking —
+# they just score lower on that dimension.
+_RANK_WEIGHTS = {
+    "velocity_score":    0.40,  # demand acceleration — strongest forward signal
+    "bucket_rank_score": 0.30,  # Impetus forecast strength (predicted score, 4mo, confidence)
+    "momentum_boost":    0.15,  # Impetus alert type — Breakout > Rising > Steady
+    "lifecycle_boost":   0.10,  # new/rising trends get a small boost over peak
+    "time_decay":        0.05,  # trends closer to peak date rank higher right now
+}
+
+_LIFECYCLE_BOOST = {
+    "new":    1.0,
+    "rising": 0.8,
+    "peak":   0.4,
+    "fading": 0.0,
+}
+
+_MOMENTUM_BOOST = {
+    "Breakout":             1.0,
+    "Rising (consistent)":  0.8,
+    "Rising":               0.6,
+    "Steady":               0.3,
+    "LLM/calendar":         0.0,  # no Impetus signal
+}
+
+
+def _safe_float(val, default: float = 0.0) -> float:
+    try:
+        return float(val) if val not in (None, "", "nan") else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _minmax_normalise(values: list[float]) -> list[float]:
+    import math
+    lo, hi = min(values), max(values)
+    if math.isclose(lo, hi):
+        return [0.5] * len(values)
+    return [(v - lo) / (hi - lo) for v in values]
+
+
+def rank_trends(trends: list[dict]) -> list[dict]:
+    """Add global_rank and category_rank to every trend.
+
+    Global rank  : all trends sorted by composite score.
+    Category rank: ranked within each trend_category group.
+
+    Composite score (0–1):
+      40% velocity_score     — demand acceleration from Impetus
+      30% judge_top_score    — name quality (0–5 normalised to 0–1)
+      20% bucket_rank_score  — Impetus forecast strength (already 0–1)
+      10% lifecycle_boost    — new > rising > peak > fading
+
+    LLM-sourced trends (occasion/festival/event/functional) have no Impetus
+    signal so velocity and bucket_rank_score default to 0. They rank on
+    judge score and lifecycle only, and sit in their own category_rank group.
+    """
+    if not trends:
+        return trends
+
+    import datetime
+
+    velocities    = [_safe_float(t.get("velocity_score")) for t in trends]
+    bucket_scores = [_safe_float(t.get("bucket_rank_score")) for t in trends]
+    lifecycle     = [_LIFECYCLE_BOOST.get(t.get("lifecycle_stage", ""), 0.0) for t in trends]
+    momentum      = [_MOMENTUM_BOOST.get(t.get("momentum_label", ""), 0.0) for t in trends]
+
+    # Time decay: how close is the trend's peak to today?
+    # Trends peaking sooner score higher. LLM trends with no peak get 0.
+    today = datetime.date.today()
+    def _peak_proximity(t: dict) -> float:
+        vw = t.get("validity_window", "")
+        # Try to extract a date from validity_window or peak_month
+        peak = t.get("peak_month", "") or ""
+        for candidate in [peak, vw]:
+            if not candidate:
+                continue
+            # Match YYYY-MM or YYYY-MM-DD
+            import re as _re
+            m = _re.search(r"(\d{4}-\d{2})(?:-\d{2})?", str(candidate))
+            if m:
+                try:
+                    peak_date = _dt.date.fromisoformat(m.group(1) + "-01")
+                    days_away = (peak_date - today).days
+                    if days_away < 0:
+                        return 0.0   # already past peak
+                    # Score: 1.0 if peaking within 30 days, decays to 0 at 180 days+
+                    return max(0.0, 1.0 - days_away / 180.0)
+                except ValueError:
+                    continue
+        return 0.0
+
+    time_decay = [_peak_proximity(t) for t in trends]
+
+    vel_n      = _minmax_normalise(velocities)
+    bucket_n   = _minmax_normalise(bucket_scores)
+    life_n     = _minmax_normalise(lifecycle)
+    momentum_n = _minmax_normalise(momentum)
+    decay_n    = _minmax_normalise(time_decay)
+
+    for i, t in enumerate(trends):
+        t["_composite"] = round(
+            _RANK_WEIGHTS["velocity_score"]    * vel_n[i] +
+            _RANK_WEIGHTS["bucket_rank_score"] * bucket_n[i] +
+            _RANK_WEIGHTS["momentum_boost"]    * momentum_n[i] +
+            _RANK_WEIGHTS["lifecycle_boost"]   * life_n[i] +
+            _RANK_WEIGHTS["time_decay"]        * decay_n[i],
+            4,
+        )
+        t["rank_score"] = t["_composite"]
+        t["rank_basis"] = (
+            f"velocity={velocities[i]:.4f}(w=0.40) | "
+            f"bucket={bucket_scores[i]:.4f}(w=0.30) | "
+            f"momentum={t.get('momentum_label','')}(w=0.15) | "
+            f"lifecycle={t.get('lifecycle_stage','')}(w=0.10) | "
+            f"time_decay={time_decay[i]:.3f}(w=0.05)"
+        )
+
+    # Global rank.
+    trends.sort(key=lambda t: t["_composite"], reverse=True)
+    for rank, t in enumerate(trends, 1):
+        t["global_rank"] = rank
+
+    # Category rank.
+    from collections import defaultdict
+    cat_groups: dict[str, list] = defaultdict(list)
+    for t in trends:
+        cat_groups[t.get("trend_category", "unknown")].append(t)
+
+    for cat, group in cat_groups.items():
+        group.sort(key=lambda t: t["_composite"], reverse=True)
+        for rank, t in enumerate(group, 1):
+            t["category_rank"] = rank
+
+    for t in trends:
+        t.pop("_composite", None)
+
+    print(f"\n[ranking] {len(trends)} trends ranked — weights: velocity=40% | bucket=30% | momentum=15% | lifecycle=10% | time_decay=5%")
+    for cat, group in sorted(cat_groups.items()):
+        top = group[0]
+        print(f"  {cat:<22} {len(group):>3} trends | "
+              f"#1 → '{top.get('display_name', '')}' (score={top.get('rank_score', 0):.4f})")
+
+    return trends

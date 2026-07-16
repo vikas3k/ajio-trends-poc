@@ -24,7 +24,6 @@ from typing import Literal
 from pydantic import BaseModel
 
 from . import prompts
-from .calendar import calendar_block
 from .llm import grounded_call, structured_call
 from .state import AgentState
 
@@ -221,11 +220,9 @@ def run(state: AgentState) -> AgentState:
     print(f"[agent2] attribute_driven trends: {len(attr_trends)}")
 
     # D. Occasion/Event/Functional trends from live context (PRD 6.2).
-    calendar = calendar_block(today=_dt.date.today())
-    print(f"[agent2] calendar block: {calendar.count(chr(10))+1} events injected")
     ctx_prompt = prompts.fmt(
         "agent2.context_trends", today=today, brief=brief,
-        buzz_lines=buzz_lines, calendar=calendar,
+        buzz_lines=buzz_lines, calendar="",
     )
     ctx_trends = structured_call(
         ctx_prompt, list[ContextTrend], system=prompts.get("agent2.context_system"),
